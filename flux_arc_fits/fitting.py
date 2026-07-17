@@ -26,7 +26,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_8.npz")
+    data = np.load(current_dir / "qubit_data_6.npz")
     return (data,)
 
 
@@ -154,9 +154,8 @@ def _(mo):
 def _(bias_pts, freq_pts, np):
     from scipy.optimize import curve_fit
 
-
     def f01_model(phi, EJ1, EJ2, EC, Phi0):
-        """Eq. 14.38 from Manenti, Motta"""
+        """Eq. 14.38 from Manenti & Motta"""
         x = np.pi * phi / Phi0
         d = (EJ1 - EJ2) / (EJ1 + EJ2)
         EJ = (EJ1 + EJ2) * np.sqrt(
@@ -181,10 +180,14 @@ def _(bias_pts, freq_pts, np):
 
     best_inliers = None
     best_params = None
-
+    tried = set()
     for _ in range(100):
-
-        subset = np.random.choice(len(bias_pts), len(p0), replace=False)
+        n = np.random.randint(len(p0), len(bias_pts))
+        subset = np.random.choice(len(bias_pts), n, replace=False)
+        subset_ = tuple(sorted(subset))
+        if subset_ in tried:
+            continue
+        tried.add(subset_)
 
         try:
             popt, _ = curve_fit(
