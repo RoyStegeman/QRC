@@ -18,6 +18,16 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    We should allow for multiple fit functions since fitting the full f01 function is quite time consuming and in most cases the user is probably just interested in knowing the peak of the flux arc, which can be achieved much faster by a simple 2nd or 4th order polynomial.
+
+    Should d=0 also be toggleable?
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ### Load data
     """)
     return
@@ -26,7 +36,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_6.npz")
+    data = np.load(current_dir / "qubit_data_1.npz")
     return (data,)
 
 
@@ -154,9 +164,14 @@ def _(mo):
 def _(bias_pts, freq_pts, np):
     from scipy.optimize import curve_fit
 
-    def f01_model(phi, EJ1, EJ2, EC, Phi0):
-        """Eq. 14.38 from Manenti & Motta"""
-        x = np.pi * phi / Phi0
+    def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
+        """Eq. 14.38 from Manenti & Motta
+
+        We know the bias in voltage, but not what flux this results in. 
+        So phi is not flux, but linearly dependent on it. By fitting phi0, 
+        we are effectively fitting the ratio of bias voltage to flux.      
+        """
+        x = np.pi * bias / bias_flux_ratio
         d = (EJ1 - EJ2) / (EJ1 + EJ2)
         EJ = (EJ1 + EJ2) * np.sqrt(
             np.cos(x)**2 + d**2 * np.sin(x)**2
@@ -170,7 +185,7 @@ def _(bias_pts, freq_pts, np):
         5.5, # EJ1/h in GHz
         5.5, # EJ2/h in GHz
         0.2, # EC/h in GHz
-        np.mean(bias_pts), # Phi0
+        np.mean(bias_pts), # Guess that we have approx 1 period in the data window
     ]
 
     bounds = (
@@ -182,8 +197,9 @@ def _(bias_pts, freq_pts, np):
     best_params = None
     tried = set()
     for _ in range(100):
-        n = np.random.randint(len(p0), len(bias_pts))
-        subset = np.random.choice(len(bias_pts), n, replace=False)
+        # we only take len(p0) points. This is because more points decrease 
+        # the likelihood subsets will contain no outliers. 
+        subset = np.random.choice(len(bias_pts), len(p0), replace=False)
         subset_ = tuple(sorted(subset))
         if subset_ in tried:
             continue
@@ -202,7 +218,7 @@ def _(bias_pts, freq_pts, np):
             continue
 
         residuals = np.abs(freq_ghz - f01_model(bias_pts, *popt))
-        inliers = residuals < 0.5e6/1e9
+        inliers = residuals < 0.5e6/1e9 # based on the width of the lorentzian of a qubit
 
         if best_inliers is None or inliers.sum() > best_inliers.sum():
             best_inliers = inliers
@@ -217,7 +233,14 @@ def _(bias_pts, freq_pts, np):
         bounds=bounds,
         maxfev=100000
     )
-    return f01_model, popt
+    return best_params, f01_model, popt
+
+
+@app.cell
+def _(best_params):
+    # NOTE: the parameters are non-physical and the fit above complains that the covariance could not be estimated. This suggests a degeneracy between parameters (also indicated by the tiny EC). I suspect the degeneracy is becuase we are very zoomed in and therefore don't need all paramters to describe the parabolic shape in the data window. 
+    best_params 
+    return
 
 
 @app.cell
