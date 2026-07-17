@@ -1,15 +1,18 @@
 import marimo
 
-__generated_with = "0.23.9"
-app = marimo.App()
+__generated_with = "0.23.14"
+app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
+    import marimo as mo
+
     import numpy as np
     import matplotlib.pyplot as plt
+    from pathlib import Path
 
-    return np, plt
+    return Path, mo, np, plt
 
 
 @app.cell(hide_code=True)
@@ -21,8 +24,9 @@ def _(mo):
 
 
 @app.cell
-def _(np):
-    data = np.load("./qubit_data_5.npz")
+def _(Path, np):
+    current_dir = Path(__file__).resolve().parent
+    data = np.load(current_dir / "qubit_data_8.npz")
     return (data,)
 
 
@@ -38,7 +42,7 @@ def _(data, np):
     freq = np.unique(freq_data)
     bias = np.unique(bias_data)
     signal = signal_data.reshape(len(bias), len(freq))
-    return bias, freq, signal
+    return bias, freq, freq_data, signal
 
 
 @app.cell
@@ -119,6 +123,9 @@ def _(bias, filtered_signal, freq, np):
         best = peaks[np.argmax(props["prominences"])]
         bias_pts.append(bias[i])
         freq_pts.append(freq[best])
+
+    bias_pts = np.asarray(bias_pts)
+    freq_pts = np.asarray(freq_pts)
     return bias_pts, freq_pts
 
 
@@ -138,46 +145,98 @@ def _(bias, bias_pts, filtered_signal, freq, freq_pts, plt):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Fit parabola
+    ### Perform the fit
     """)
     return
 
 
 @app.cell
 def _(bias_pts, freq_pts, np):
-    from sklearn.linear_model import RANSACRegressor
-    from sklearn.preprocessing import PolynomialFeatures
-    from sklearn.pipeline import make_pipeline
+    from scipy.optimize import curve_fit
 
-    # residual_threshold is 1e6 as this is the approximate with of a qubit lorentzian
-    ransac_parabola = make_pipeline(
-        PolynomialFeatures(degree=2, include_bias=False),
-        RANSACRegressor(min_samples=3, residual_threshold=1e6, random_state=0)
+
+    def f01_model(phi, EJ1, EJ2, EC, Phi0):
+        """Eq. 14.38 from Manenti, Motta"""
+        x = np.pi * phi / Phi0
+        d = (EJ1 - EJ2) / (EJ1 + EJ2)
+        EJ = (EJ1 + EJ2) * np.sqrt(
+            np.cos(x)**2 + d**2 * np.sin(x)**2
+        )
+        return np.sqrt(8 * EC * EJ) - EC
+
+
+    freq_ghz = freq_pts / 1e9
+
+    p0 = [
+        5.5, # EJ1/h in GHz
+        5.5, # EJ2/h in GHz
+        0.2, # EC/h in GHz
+        np.mean(bias_pts), # Phi0
+    ]
+
+    bounds = (
+        [0, 0, 0, -np.inf],
+        [np.inf, np.inf, np.inf, np.inf]
     )
 
-    ransac_parabola.fit(np.array(bias_pts).reshape(-1, 1), np.array(freq_pts));
-    return (ransac_parabola,)
+    best_inliers = None
+    best_params = None
+
+    for _ in range(100):
+
+        subset = np.random.choice(len(bias_pts), len(p0), replace=False)
+
+        try:
+            popt, _ = curve_fit(
+                f01_model,
+                bias_pts[subset],
+                freq_ghz[subset],
+                p0=p0,
+                bounds=bounds,
+                maxfev=10000,
+            )
+        except RuntimeError:
+            continue
+
+        residuals = np.abs(freq_ghz - f01_model(bias_pts, *popt))
+        inliers = residuals < 0.5e6/1e9
+
+        if best_inliers is None or inliers.sum() > best_inliers.sum():
+            best_inliers = inliers
+            best_params = popt
+
+    # Refit using all inliers
+    popt, _ = curve_fit(
+        f01_model,
+        bias_pts[best_inliers],
+        freq_ghz[best_inliers],
+        p0=best_params,
+        bounds=bounds,
+        maxfev=100000
+    )
+    return f01_model, popt
 
 
 @app.cell
 def _(
     bias,
     bias_pts,
+    f01_model,
     filtered_signal,
     freq,
+    freq_data,
     freq_pts,
     np,
     plt,
-    ransac_parabola,
+    popt,
 ):
     plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
     plt.scatter(freq_pts, bias_pts, color='white', marker='.', label='Detected Peaks')
-
-    # Plot the RANSAC-fitted parabola
-    bias_plot_vals = np.linspace(bias.min(), bias.max(), 500).reshape(-1, 1)
-    freq_plot_vals = ransac_parabola.predict(bias_plot_vals)
+    bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
+    freq_plot_vals = f01_model(bias_plot_vals, *popt) * 1e9
     plt.plot(freq_plot_vals, bias_plot_vals, color='red', label='Fit')
 
+    plt.xlim(freq_data.min(), freq_data.max())
     plt.xlabel("Frequency")
     plt.ylabel("Bias")
     plt.colorbar(label="Signal")
