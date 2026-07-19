@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.14"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
@@ -36,7 +36,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_1.npz")
+    data = np.load(current_dir / "qubit_data_0.npz")
     return (data,)
 
 
@@ -162,89 +162,170 @@ def _(mo):
 
 @app.cell
 def _(bias_pts, freq_pts, np):
-    from scipy.optimize import curve_fit
+    from scipy.optimize import root, curve_fit
 
     def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
-        """Eq. 14.38 from Manenti & Motta
-
-        We know the bias in voltage, but not what flux this results in. 
-        So phi is not flux, but linearly dependent on it. By fitting phi0, 
-        we are effectively fitting the ratio of bias voltage to flux.      
-        """
         x = np.pi * bias / bias_flux_ratio
         d = (EJ1 - EJ2) / (EJ1 + EJ2)
+
         EJ = (EJ1 + EJ2) * np.sqrt(
             np.cos(x)**2 + d**2 * np.sin(x)**2
         )
+
         return np.sqrt(8 * EC * EJ) - EC
+
+
+    def residuals(log_params, bias, freq):
+        EJ1, EJ2, EC = np.exp(log_params[:3])
+        bias_flux_ratio = log_params[3]
+
+        return (
+            f01_model(
+                bias,
+                EJ1,
+                EJ2,
+                EC,
+                bias_flux_ratio,
+            )
+            - freq
+        )
 
 
     freq_ghz = freq_pts / 1e9
 
-    p0 = [
-        5.5, # EJ1/h in GHz
-        5.5, # EJ2/h in GHz
-        0.2, # EC/h in GHz
-        np.mean(bias_pts), # Guess that we have approx 1 period in the data window
-    ]
+    p0 = np.array([
+        np.log(5.5),
+        np.log(5.5),
+        np.log(0.2),
+        np.mean(bias_pts),
+    ])
 
-    bounds = (
-        [0, 0, 0, -np.inf],
-        [np.inf, np.inf, np.inf, np.inf]
-    )
 
     best_inliers = None
     best_params = None
     tried = set()
+
     for _ in range(100):
-        # we only take len(p0) points. This is because more points decrease 
-        # the likelihood subsets will contain no outliers. 
-        subset = np.random.choice(len(bias_pts), len(p0), replace=False)
+
+        subset = np.random.choice(
+            len(bias_pts),
+            len(p0),
+            replace=False,
+        )
+
         subset_ = tuple(sorted(subset))
+
         if subset_ in tried:
             continue
+
         tried.add(subset_)
 
-        try:
-            popt, _ = curve_fit(
-                f01_model,
+        result = root(
+            residuals,
+            p0,
+            method="lm",
+            args=(
                 bias_pts[subset],
                 freq_ghz[subset],
-                p0=p0,
-                bounds=bounds,
-                maxfev=10000,
-            )
-        except RuntimeError:
+            ),
+        )
+
+        if not result.success:
             continue
 
-        residuals = np.abs(freq_ghz - f01_model(bias_pts, *popt))
-        inliers = residuals < 0.5e6/1e9 # based on the width of the lorentzian of a qubit
+        popt = np.array([
+            np.exp(result.x[0]),
+            np.exp(result.x[1]),
+            np.exp(result.x[2]),
+            result.x[3],
+        ])
 
-        if best_inliers is None or inliers.sum() > best_inliers.sum():
+        if not np.all(np.isfinite(popt)):
+            continue
+
+        residuals_all = np.abs(
+            freq_ghz - f01_model(bias_pts, *popt)
+        )
+
+        inliers = residuals_all < 0.5e6 / 1e9
+
+        if (
+            best_inliers is None
+            or inliers.sum() > best_inliers.sum()
+        ):
             best_inliers = inliers
             best_params = popt
 
-    # Refit using all inliers
+
+    # Final least-squares fit using all inliers
     popt, _ = curve_fit(
         f01_model,
         bias_pts[best_inliers],
         freq_ghz[best_inliers],
         p0=best_params,
-        bounds=bounds,
-        maxfev=100000
+        bounds=(
+            [0, 0, 0, -np.inf],
+            [np.inf, np.inf, np.inf, np.inf],
+        ),
+        maxfev=100000,
     )
-    return best_params, f01_model, popt
+    return best_inliers, best_params, curve_fit, f01_model, freq_ghz, popt
+
+
+@app.cell
+def _(
+    best_inliers,
+    best_params,
+    bias,
+    bias_plot_vals,
+    bias_pts,
+    curve_fit,
+    f01_model,
+    filtered_signal,
+    freq,
+    freq_data,
+    freq_ghz,
+    freq_pts,
+    np,
+    plt,
+):
+    popt1, _ = curve_fit(
+        f01_model,
+        bias_pts[best_inliers],
+        freq_ghz[best_inliers],
+        p0=best_params,
+        bounds=(
+            [0, 0, 0, -np.inf],
+            [np.inf, np.inf, np.inf, np.inf],
+        ),
+        maxfev=100000,
+    )
+
+    plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
+    plt.scatter(freq_pts, bias_pts, color='white', marker='.', label='Detected Peaks')
+    bias_plot_vals1 = np.linspace(bias.min(), bias.max(), num=500)
+    freq_plot_vals1 = f01_model(bias_plot_vals1, *popt1) * 1e9
+    plt.plot(freq_plot_vals1, bias_plot_vals, color='red', label='Fit')
+
+    plt.xlim(freq_data.min(), freq_data.max())
+    plt.xlabel("Frequency")
+    plt.ylabel("Bias")
+    plt.colorbar(label="Signal")
+    plt.legend()
+    plt.show()
+    return
 
 
 @app.cell
 def _(best_params):
-    # NOTE: the parameters are non-physical and the fit above complains that the covariance could not be estimated. This suggests a degeneracy between parameters (also indicated by the tiny EC). I suspect the degeneracy is becuase we are very zoomed in and therefore don't need all paramters to describe the parabolic shape in the data window. 
-    best_params 
+    # NOTE: the parameters are non-physical and the fit above complains that the covariance could not be estimated. This suggests a degeneracy between parameters (also indicated by the tiny EC). I suspect the degeneracy is becuase we are very zoomed in and therefore don't need all paramters to describe the parabolic shape in the data window.
+    best_params
     return
 
 
 @app.cell
 def _(
+    best_inliers,
     bias,
     bias_pts,
     f01_model,
@@ -257,7 +338,8 @@ def _(
     popt,
 ):
     plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    plt.scatter(freq_pts, bias_pts, color='white', marker='.', label='Detected Peaks')
+    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='white', marker='.', label='Detected Peaks')
+    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='darkorange', marker='.', label='inliers')
     bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
     freq_plot_vals = f01_model(bias_plot_vals, *popt) * 1e9
     plt.plot(freq_plot_vals, bias_plot_vals, color='red', label='Fit')
@@ -268,7 +350,7 @@ def _(
     plt.colorbar(label="Signal")
     plt.legend()
     plt.show()
-    return
+    return (bias_plot_vals,)
 
 
 if __name__ == "__main__":
