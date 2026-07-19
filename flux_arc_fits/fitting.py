@@ -268,7 +268,6 @@ def _(bias_pts, freq_pts, np):
             if denom < 0:  # guard: w_hat**n_sample < 1
                 N_needed = np.log(1 - p_success) / denom
 
-    print(ransac_iterations)
     return best_inliers, best_params, curve_fit, f01_model, freq_ghz, popt
 
 
@@ -312,7 +311,6 @@ def _(final_params):
 @app.cell
 def _(
     best_inliers,
-    best_params,
     bias,
     bias_pts,
     f01_model,
@@ -330,9 +328,6 @@ def _(
     bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
     freq_plot_vals = f01_model(bias_plot_vals, *final_params) * 1e9
     plt.plot(freq_plot_vals, bias_plot_vals, color='black', label='Fit')
-
-    best_params_plot_vals = f01_model(bias_plot_vals, *best_params) * 1e9
-    plt.plot(best_params_plot_vals, bias_plot_vals, color='red', label='best_params')
 
     plt.xlim(freq_data.min(), freq_data.max())
     plt.xlabel("Frequency")
