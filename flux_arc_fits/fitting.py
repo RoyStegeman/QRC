@@ -36,7 +36,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_0.npz")
+    data = np.load(current_dir / "qubit_data_5.npz")
     return (data,)
 
 
@@ -247,7 +247,7 @@ def _(bias_pts, freq_pts, np):
             freq_ghz - f01_model(bias_pts, *popt)
         )
 
-        inliers = residuals_all < 0.5e6 / 1e9
+        inliers = residuals_all < 0.7e6 / 1e9
 
         if (
             best_inliers is None
@@ -255,20 +255,6 @@ def _(bias_pts, freq_pts, np):
         ):
             best_inliers = inliers
             best_params = popt
-
-
-    # Final least-squares fit using all inliers
-    popt, _ = curve_fit(
-        f01_model,
-        bias_pts[best_inliers],
-        freq_ghz[best_inliers],
-        p0=best_params,
-        bounds=(
-            [0, 0, 0, -np.inf],
-            [np.inf, np.inf, np.inf, np.inf],
-        ),
-        maxfev=100000,
-    )
     return best_inliers, best_params, curve_fit, f01_model, freq_ghz, popt
 
 
@@ -276,50 +262,37 @@ def _(bias_pts, freq_pts, np):
 def _(
     best_inliers,
     best_params,
-    bias,
-    bias_plot_vals,
     bias_pts,
     curve_fit,
     f01_model,
-    filtered_signal,
-    freq,
-    freq_data,
     freq_ghz,
-    freq_pts,
     np,
-    plt,
+    popt,
 ):
-    popt1, _ = curve_fit(
+    # Final least-squares fit using all inliers
+    final_params, _ = curve_fit(
         f01_model,
         bias_pts[best_inliers],
         freq_ghz[best_inliers],
         p0=best_params,
-        bounds=(
-            [0, 0, 0, -np.inf],
-            [np.inf, np.inf, np.inf, np.inf],
-        ),
+        # bounds=(
+        #     [0, 0, 0, -np.inf],
+        #     [np.inf, np.inf, np.inf, np.inf],
+        # ),
+        method='lm',
         maxfev=100000,
     )
 
-    plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    plt.scatter(freq_pts, bias_pts, color='white', marker='.', label='Detected Peaks')
-    bias_plot_vals1 = np.linspace(bias.min(), bias.max(), num=500)
-    freq_plot_vals1 = f01_model(bias_plot_vals1, *popt1) * 1e9
-    plt.plot(freq_plot_vals1, bias_plot_vals, color='red', label='Fit')
+    if not np.all(final_params > 0):
+        print("Warning: LM fit produced nonphysical (negative) EJ/EC:", popt)
 
-    plt.xlim(freq_data.min(), freq_data.max())
-    plt.xlabel("Frequency")
-    plt.ylabel("Bias")
-    plt.colorbar(label="Signal")
-    plt.legend()
-    plt.show()
-    return
+    return (final_params,)
 
 
 @app.cell
-def _(best_params):
+def _(final_params):
     # NOTE: the parameters are non-physical and the fit above complains that the covariance could not be estimated. This suggests a degeneracy between parameters (also indicated by the tiny EC). I suspect the degeneracy is becuase we are very zoomed in and therefore don't need all paramters to describe the parabolic shape in the data window.
-    best_params
+    final_params
     return
 
 
@@ -330,19 +303,19 @@ def _(
     bias_pts,
     f01_model,
     filtered_signal,
+    final_params,
     freq,
     freq_data,
     freq_pts,
     np,
     plt,
-    popt,
 ):
     plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='white', marker='.', label='Detected Peaks')
-    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='darkorange', marker='.', label='inliers')
+    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='white', marker='.', s=60, zorder=10, label='Detected Peaks')
+    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='magenta', marker='.', s=60, zorder=10, label='inliers')
     bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
-    freq_plot_vals = f01_model(bias_plot_vals, *popt) * 1e9
-    plt.plot(freq_plot_vals, bias_plot_vals, color='red', label='Fit')
+    freq_plot_vals = f01_model(bias_plot_vals, *final_params) * 1e9
+    plt.plot(freq_plot_vals, bias_plot_vals, color='black', label='Fit')
 
     plt.xlim(freq_data.min(), freq_data.max())
     plt.xlabel("Frequency")
@@ -350,7 +323,12 @@ def _(
     plt.colorbar(label="Signal")
     plt.legend()
     plt.show()
-    return (bias_plot_vals,)
+    return
+
+
+@app.cell
+def _():
+    return
 
 
 if __name__ == "__main__":
