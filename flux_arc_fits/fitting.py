@@ -36,7 +36,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_5.npz")
+    data = np.load(current_dir / "qubit_data_0.npz")
     return (data,)
 
 
@@ -123,7 +123,7 @@ def _(bias, filtered_signal, freq, np):
 
     prominence = np.median(np.abs(filtered_signal - np.median(filtered_signal)))
     bias_pts, freq_pts, amp_pts = [], [], []
-    for i, row in enumerate(filtered_signal):
+    for index_filtered_signal, row in enumerate(filtered_signal):
         smoothed_row = gaussian_filter1d(row, sigma=2)
         row_mad = np.median(np.abs(smoothed_row - np.median(smoothed_row)))
         peaks, props = find_peaks(smoothed_row, prominence=row_mad) # use find_peaks instead of argmax because there may be nothing in a row
@@ -131,7 +131,7 @@ def _(bias, filtered_signal, freq, np):
             continue
         # keep the strongest candidate in this row
         best = peaks[np.argmax(props["prominences"])]
-        bias_pts.append(bias[i])
+        bias_pts.append(bias[index_filtered_signal])
         freq_pts.append(freq[best])
 
     bias_pts = np.asarray(bias_pts)
@@ -201,11 +201,21 @@ def _(bias_pts, freq_pts, np):
     ])
 
 
+    p_success = 0.999      # desired probability of finding a clean sample
+    n_sample = len(p0)
+    min_iters = 20
+    max_iters = 5000
+
     best_inliers = None
     best_params = None
     tried = set()
 
-    for _ in range(100):
+    N_needed = max_iters   # pessimistic until we have an estimate
+    ransac_iterations = 0
+
+
+    while ransac_iterations < min(N_needed, max_iters) or ransac_iterations < min_iters:
+        ransac_iterations += 1
 
         subset = np.random.choice(
             len(bias_pts),
@@ -247,14 +257,18 @@ def _(bias_pts, freq_pts, np):
             freq_ghz - f01_model(bias_pts, *popt)
         )
 
-        inliers = residuals_all < 0.7e6 / 1e9
+        inliers = residuals_all < 0.5e6 / 1e9
 
-        if (
-            best_inliers is None
-            or inliers.sum() > best_inliers.sum()
-        ):
+        if ( best_inliers is None or inliers.sum() > best_inliers.sum() ):
             best_inliers = inliers
             best_params = popt
+
+            w_hat = max(best_inliers.sum() / len(bias_pts), 1e-3)   # avoid log(0)
+            denom = np.log(1 - w_hat**n_sample)
+            if denom < 0:  # guard: w_hat**n_sample < 1
+                N_needed = np.log(1 - p_success) / denom
+
+    print(ransac_iterations)
     return best_inliers, best_params, curve_fit, f01_model, freq_ghz, popt
 
 
@@ -285,7 +299,6 @@ def _(
 
     if not np.all(final_params > 0):
         print("Warning: LM fit produced nonphysical (negative) EJ/EC:", popt)
-
     return (final_params,)
 
 
@@ -299,23 +312,27 @@ def _(final_params):
 @app.cell
 def _(
     best_inliers,
+    best_params,
     bias,
     bias_pts,
     f01_model,
-    filtered_signal,
     final_params,
     freq,
     freq_data,
     freq_pts,
     np,
     plt,
+    signal,
 ):
-    plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
+    plt.pcolormesh(freq, bias, signal, cmap="viridis")
     plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='white', marker='.', s=60, zorder=10, label='Detected Peaks')
     plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='magenta', marker='.', s=60, zorder=10, label='inliers')
     bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
     freq_plot_vals = f01_model(bias_plot_vals, *final_params) * 1e9
     plt.plot(freq_plot_vals, bias_plot_vals, color='black', label='Fit')
+
+    best_params_plot_vals = f01_model(bias_plot_vals, *best_params) * 1e9
+    plt.plot(best_params_plot_vals, bias_plot_vals, color='red', label='best_params')
 
     plt.xlim(freq_data.min(), freq_data.max())
     plt.xlabel("Frequency")
@@ -323,11 +340,6 @@ def _(
     plt.colorbar(label="Signal")
     plt.legend()
     plt.show()
-    return
-
-
-@app.cell
-def _():
     return
 
 
