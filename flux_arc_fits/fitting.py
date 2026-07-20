@@ -36,7 +36,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_2.npz")
+    data = np.load(current_dir / "qubit_data_1.npz")
     return (data,)
 
 
@@ -68,7 +68,7 @@ def _(bias, freq, plt, signal):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Remove background
+    ### Remove background (along column is just for the resonator)
     """)
     return
 
@@ -81,16 +81,16 @@ def _(np, signal):
     # bin is a good way to estimate the non-resonator contribution to the background.
     #
     # NOTE: this works on the assumption that the resonator peak does not affect the median
-    col_median = np.median(signal, axis=0, keepdims=True)
-    col_diff = signal - col_median
+    # col_median = np.median(signal, axis=0, keepdims=True)
+    # col_diff = signal - col_median
 
     # Subtract also the row median, to remove the background contribution we see as the
     # gradient centred on the peak of the flux-arc.
     #
     # NOTE: this is probably a consequence of reading the resonator at the flux bias point,
     # so can be avoided by moving the readout frequency to follow the resonator flux-arc
-    row_median = np.median(col_diff, axis=1, keepdims=True)
-    double_diff = col_diff - row_median
+    row_median = np.median(signal, axis=1, keepdims=True)
+    double_diff = signal - row_median
 
     # Determine if the remaining feature is a peak or a dip
     sign = 1 if np.abs(double_diff.max()) > np.abs(double_diff.min()) else -1
@@ -221,7 +221,7 @@ def _(bias_pts, freq_pts, np):
     # The number of iterations is determined following the standard for RANSAC
     # https://en.wikipedia.org/wiki/Random_sample_consensus#Parameters
     p_success = 0.999 # desired probability of finding a sample containing only inliers
-    min_iters = 20
+    min_iters = 100
     max_iters = 5000
 
 
