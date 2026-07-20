@@ -36,13 +36,13 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_0.npz")
+    data = np.load(current_dir / "qubit_data_2.npz")
     return (data,)
 
 
 @app.cell
 def _(data, np):
-    # this is a single-qubit experiment so just pick the only qubit
+    # This is a single-qubit experiment so just pick the only qubit
     qubit = list(data.keys())[0]
     data_arr = data[qubit]
     freq_data = data_arr["freq"]
@@ -58,9 +58,9 @@ def _(data, np):
 @app.cell
 def _(bias, freq, plt, signal):
     plt.pcolormesh(freq, bias, signal, cmap="viridis")
-    plt.xlabel("Frequency")
-    plt.ylabel("Bias")
-    plt.colorbar(label="Signal")
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Bias [a.u.]")
+    plt.colorbar(label="Signal [a.u.]")
     plt.show()
     return
 
@@ -75,7 +75,7 @@ def _(mo):
 
 @app.cell
 def _(np, signal):
-    # the frequency dependence of the resonator is flux-dependent, but the frequency
+    # The frequency dependence of the resonator is flux-dependent, but the frequency
     # dependence of the elements that affect the background signal (cable response,
     # amplifiers) do not depend on flux. Therefore subtracting the mean across a frequency
     # bin is a good way to estimate the non-resonator contribution to the background.
@@ -101,9 +101,9 @@ def _(np, signal):
 @app.cell
 def _(bias, filtered_signal, freq, plt):
     plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    plt.xlabel("Frequency")
-    plt.ylabel("Bias")
-    plt.colorbar(label="Signal")
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Bias [a.u.]")
+    plt.colorbar(label="Signal [a.u.]")
     plt.show()
     return
 
@@ -120,16 +120,30 @@ def _(mo):
 def _(bias, filtered_signal, freq, np):
     from scipy.ndimage import gaussian_filter1d
     from scipy.signal import find_peaks
+    from scipy.special import erfinv
 
     prominence = np.median(np.abs(filtered_signal - np.median(filtered_signal)))
     bias_pts, freq_pts, amp_pts = [], [], []
     for index_filtered_signal, row in enumerate(filtered_signal):
+        # The Gaussian filter not only reduces noise in the background far away from the
+        # arc, but also reduces noise within the arc, which may result in peaks being
+        # detected correctly that otherwise would have been missed (see e.g
+        # qubit_data_3.npz).
         smoothed_row = gaussian_filter1d(row, sigma=2)
+        # The standard deviation is computed from the median absolute deviation instead of
+        # the standard deviation itself to avoid the peaks in the arc from affecting the
+        # estimate of the background noise. While this prominence threshold is somewhat
+        # motivated, it is still a choice and it has been observed that the result is not
+        # very sensitive to it and probably it is even fine to set the threshold to 0.
         row_mad = np.median(np.abs(smoothed_row - np.median(smoothed_row)))
-        peaks, props = find_peaks(smoothed_row, prominence=row_mad) # use find_peaks instead of argmax because there may be nothing in a row
+        row_std = 1.0 / (np.sqrt(2) * erfinv(0.5)) * row_mad
+        # Use find_peaks instead of argmax because there may be nothing in a row
+        peaks, props = find_peaks(smoothed_row, prominence=row_std)
+
         if len(peaks) == 0:
             continue
-        # keep the strongest candidate in this row
+
+        # Keep only the peak with the largest prominence per bias
         best = peaks[np.argmax(props["prominences"])]
         bias_pts.append(bias[index_filtered_signal])
         freq_pts.append(freq[best])
@@ -142,11 +156,11 @@ def _(bias, filtered_signal, freq, np):
 @app.cell
 def _(bias, bias_pts, filtered_signal, freq, freq_pts, plt):
     plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    plt.scatter(freq_pts, bias_pts, color='white', marker='.', label='Detected Peaks')
+    plt.scatter(freq_pts, bias_pts, color='white', marker='.', s=60, zorder=10, label='Detected peaks')
 
-    plt.xlabel("Frequency")
-    plt.ylabel("Bias")
-    plt.colorbar(label="Signal")
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Bias [a.u.]")
+    plt.colorbar(label="Signal [a.u.]")
     plt.legend()
     plt.show()
     return
@@ -155,29 +169,32 @@ def _(bias, bias_pts, filtered_signal, freq, freq_pts, plt):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Perform the fit
+    ### Perform the fit using RANSAC
     """)
     return
 
 
 @app.cell
 def _(bias_pts, freq_pts, np):
-    from scipy.optimize import root, curve_fit
+    from scipy.optimize import least_squares
+
+    INLIER_THRESHOLD = 0.5e6 # approximate width of a peak in the qubit spectroscopy in Hz
 
     def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
+        """Eq. 14.38 from Manenti & Motta"""
         x = np.pi * bias / bias_flux_ratio
         d = (EJ1 - EJ2) / (EJ1 + EJ2)
-
-        EJ = (EJ1 + EJ2) * np.sqrt(
-            np.cos(x)**2 + d**2 * np.sin(x)**2
-        )
-
+        EJ = (EJ1 + EJ2) * np.sqrt(np.cos(x)**2 + d**2 * np.sin(x)**2)
         return np.sqrt(8 * EC * EJ) - EC
 
 
-    def residuals(log_params, bias, freq):
-        EJ1, EJ2, EC = np.exp(log_params[:3])
-        bias_flux_ratio = log_params[3]
+    def residuals(params, bias, freq):
+        # We take the exponent because it has been observed that the fitted energies take
+        # unphysical values with EJ1 and EJ2 becoming many orders of magnitude larger and
+        # EC many orders of magnitude smaller than physical. This slows down the fit, but
+        # taking the exponent speeds up fits across many orders of magnitude.
+        EJ1, EJ2, EC = np.exp(params[:3])
+        bias_flux_ratio = params[3]
 
         return (
             f01_model(
@@ -201,39 +218,31 @@ def _(bias_pts, freq_pts, np):
     ])
 
 
-    p_success = 0.999      # desired probability of finding a clean sample
-    n_sample = len(p0)
+    # The number of iterations is determined following the standard for RANSAC
+    # https://en.wikipedia.org/wiki/Random_sample_consensus#Parameters
+    p_success = 0.999 # desired probability of finding a sample containing only inliers
     min_iters = 20
     max_iters = 5000
 
-    best_inliers = None
-    best_params = None
-    tried = set()
 
-    N_needed = max_iters   # pessimistic until we have an estimate
+    N_needed = np.inf
     ransac_iterations = 0
-
-
+    best_inliers = np.array([])
+    best_params = np.array([])
+    tried_subsets = set()
     while ransac_iterations < min(N_needed, max_iters) or ransac_iterations < min_iters:
         ransac_iterations += 1
 
-        subset = np.random.choice(
-            len(bias_pts),
-            len(p0),
-            replace=False,
-        )
-
+        subset = np.random.choice(len(bias_pts), len(p0), replace=False)
         subset_ = tuple(sorted(subset))
-
-        if subset_ in tried:
+        if subset_ in tried_subsets:
             continue
+        tried_subsets.add(subset_)
 
-        tried.add(subset_)
-
-        result = root(
+        result = least_squares(
             residuals,
             p0,
-            method="lm",
+            method="lm", # lm is a fast option
             args=(
                 bias_pts[subset],
                 freq_ghz[subset],
@@ -250,67 +259,77 @@ def _(bias_pts, freq_pts, np):
             result.x[3],
         ])
 
-        if not np.all(np.isfinite(popt)):
-            continue
-
-        residuals_all = np.abs(
-            freq_ghz - f01_model(bias_pts, *popt)
-        )
-
-        inliers = residuals_all < 0.5e6 / 1e9
-
-        if ( best_inliers is None or inliers.sum() > best_inliers.sum() ):
+        residuals_all = np.abs(freq_ghz - f01_model(bias_pts, *popt))
+        inliers = residuals_all < INLIER_THRESHOLD / 1e9
+        if inliers.sum() == len(bias_pts):
+            # all points are inliers, so we can proceed
             best_inliers = inliers
             best_params = popt
+            break
 
-            w_hat = max(best_inliers.sum() / len(bias_pts), 1e-3)   # avoid log(0)
-            denom = np.log(1 - w_hat**n_sample)
-            if denom < 0:  # guard: w_hat**n_sample < 1
-                N_needed = np.log(1 - p_success) / denom
-
-    return best_inliers, best_params, curve_fit, f01_model, freq_ghz, popt
+        if inliers.sum() >= len(subset) and inliers.sum() > best_inliers.sum():
+            best_inliers = inliers
+            best_params = popt
+            denom = np.log(1 - (best_inliers.sum() / len(bias_pts))**len(subset))
+            N_needed = np.log(1 - p_success) / denom
+    return best_inliers, best_params, f01_model, freq_ghz
 
 
 @app.cell
-def _(
-    best_inliers,
-    best_params,
-    bias_pts,
-    curve_fit,
-    f01_model,
-    freq_ghz,
-    np,
-    popt,
-):
-    # Final least-squares fit using all inliers
+def _(best_inliers, best_params, bias_pts, f01_model, freq_ghz):
+    from scipy.optimize import curve_fit
+
+    # Finally optimize by doing a least-squares fit to the best set of inliers
     final_params, _ = curve_fit(
         f01_model,
         bias_pts[best_inliers],
         freq_ghz[best_inliers],
         p0=best_params,
-        # bounds=(
-        #     [0, 0, 0, -np.inf],
-        #     [np.inf, np.inf, np.inf, np.inf],
-        # ),
         method='lm',
         maxfev=100000,
     )
-
-    if not np.all(final_params > 0):
-        print("Warning: LM fit produced nonphysical (negative) EJ/EC:", popt)
     return (final_params,)
 
 
 @app.cell
 def _(final_params):
-    # NOTE: the parameters are non-physical and the fit above complains that the covariance could not be estimated. This suggests a degeneracy between parameters (also indicated by the tiny EC). I suspect the degeneracy is becuase we are very zoomed in and therefore don't need all paramters to describe the parabolic shape in the data window.
+    # NOTE: the parameters are non-physical and the fit above complains that the covariance
+    # could not be estimated. This suggests a degeneracy between parameters (also indicated
+    # by the tiny EC). I suspect the degeneracy is because we are very zoomed in and
+    # therefore don't need all parameters to describe the parabolic shape in the data window.
     final_params
     return
 
 
 @app.cell
+def _(bias, final_params, np):
+    EJ1, EJ2, EC, bias_flux_ratio = final_params
+
+    # Find integers k that fall within the experimental bias range
+    bias_min, bias_max = bias.min(), bias.max()
+    k_start = int(np.ceil(min(bias_min / bias_flux_ratio, bias_max / bias_flux_ratio)))
+    k_end = int(np.floor(max(bias_min / bias_flux_ratio, bias_max / bias_flux_ratio)))
+    k_values = np.arange(k_start, k_end + 1)
+
+    peak_biases = k_values * bias_flux_ratio
+    peak_biases = peak_biases[(peak_biases >= bias_min) & (peak_biases <= bias_max)]
+
+    # Select the peak closest to 0 bias and compute its frequency
+    if len(peak_biases) > 0:
+        best_point_bias = peak_biases[np.argmin(np.abs(peak_biases))]
+        # At the absolute maximum, EJ simplifies cleanly to (EJ1 + EJ2)
+        best_point_freq_ghz = np.sqrt(8 * EC * (EJ1 + EJ2)) - EC
+        best_point_freq = best_point_freq_ghz * 1e9
+    else:
+        best_point_bias = None
+    return best_point_bias, best_point_freq
+
+
+@app.cell
 def _(
     best_inliers,
+    best_point_bias,
+    best_point_freq,
     bias,
     bias_pts,
     f01_model,
@@ -323,16 +342,19 @@ def _(
     signal,
 ):
     plt.pcolormesh(freq, bias, signal, cmap="viridis")
-    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='white', marker='.', s=60, zorder=10, label='Detected Peaks')
-    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='magenta', marker='.', s=60, zorder=10, label='inliers')
+    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='lime', marker='.', s=60, zorder=10, label='Detected peaks')
+    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='white', marker='.', s=60, zorder=10, label='RANSAC inliers')
     bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
     freq_plot_vals = f01_model(bias_plot_vals, *final_params) * 1e9
     plt.plot(freq_plot_vals, bias_plot_vals, color='black', label='Fit')
 
+    if best_point_bias is not None:
+        plt.scatter( best_point_freq, best_point_bias, color='red', marker='.', s=60, zorder=15, label="Best point")
+
     plt.xlim(freq_data.min(), freq_data.max())
-    plt.xlabel("Frequency")
-    plt.ylabel("Bias")
-    plt.colorbar(label="Signal")
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Bias [a.u.]")
+    plt.colorbar(label="Signal [a.u.]")
     plt.legend()
     plt.show()
     return
