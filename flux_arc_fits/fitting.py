@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.9"
+__generated_with = "0.23.14"
 app = marimo.App(width="medium")
 
 
@@ -11,8 +11,10 @@ def _():
     import numpy as np
     import matplotlib.pyplot as plt
     from pathlib import Path
+    from scipy.optimize import curve_fit
 
-    return Path, mo, np, plt
+
+    return Path, curve_fit, mo, np, plt
 
 
 @app.cell(hide_code=True)
@@ -36,7 +38,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_1.npz")
+    data = np.load(current_dir / "qubit_data_3.npz")
     return (data,)
 
 
@@ -49,9 +51,11 @@ def _(data, np):
     bias_data = data_arr["bias"]
     signal_data = data_arr["signal"]
 
-    freq = np.unique(freq_data)
-    bias = np.unique(bias_data)
-    signal = signal_data.reshape(len(bias), len(freq))
+    freq, freq_idx = np.unique(freq_data, return_inverse=True)
+    bias, bias_idx = np.unique(bias_data, return_inverse=True)
+
+    signal = np.full((len(bias), len(freq)), np.nan)
+    signal[bias_idx, freq_idx] = signal_data
     return bias, freq, freq_data, signal
 
 
@@ -122,8 +126,7 @@ def _(bias, filtered_signal, freq, np):
     from scipy.signal import find_peaks
     from scipy.special import erfinv
 
-    prominence = np.median(np.abs(filtered_signal - np.median(filtered_signal)))
-    bias_pts, freq_pts, amp_pts = [], [], []
+    bias_pts, freq_pts = [], []
     for index_filtered_signal, row in enumerate(filtered_signal):
         # The Gaussian filter not only reduces noise in the background far away from the
         # arc, but also reduces noise within the arc, which may result in peaks being
@@ -175,10 +178,10 @@ def _(mo):
 
 
 @app.cell
-def _(bias_pts, freq_pts, np):
-    from scipy.optimize import least_squares
+def _(bias_pts, curve_fit, freq_pts, np):
+    # from scipy.optimize import curve_fit
 
-    INLIER_THRESHOLD = 0.5e6 # approximate width of a peak in the qubit spectroscopy in Hz
+    INLIER_THRESHOLD = 0.5e6  # approximate width of a peak in the qubit spectroscopy in Hz
 
     def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
         """Eq. 14.38 from Manenti & Motta"""
@@ -188,24 +191,13 @@ def _(bias_pts, freq_pts, np):
         return np.sqrt(8 * EC * EJ) - EC
 
 
-    def residuals(params, bias, freq):
-        # We take the exponent because it has been observed that the fitted energies take
+    def f01_model_logparams(bias, log_EJ1, log_EJ2, log_EC, bias_flux_ratio):
+        # We fit the exponent because it has been observed that the fitted energies take
         # unphysical values with EJ1 and EJ2 becoming many orders of magnitude larger and
         # EC many orders of magnitude smaller than physical. This slows down the fit, but
         # taking the exponent speeds up fits across many orders of magnitude.
-        EJ1, EJ2, EC = np.exp(params[:3])
-        bias_flux_ratio = params[3]
-
-        return (
-            f01_model(
-                bias,
-                EJ1,
-                EJ2,
-                EC,
-                bias_flux_ratio,
-            )
-            - freq
-        )
+        EJ1, EJ2, EC = np.exp([log_EJ1, log_EJ2, log_EC])
+        return f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio)
 
 
     freq_ghz = freq_pts / 1e9
@@ -220,7 +212,7 @@ def _(bias_pts, freq_pts, np):
 
     # The number of iterations is determined following the standard for RANSAC
     # https://en.wikipedia.org/wiki/Random_sample_consensus#Parameters
-    p_success = 0.999 # desired probability of finding a sample containing only inliers
+    p_success = 0.999  # desired probability of finding a sample containing only inliers
     min_iters = 100
     max_iters = 5000
 
@@ -239,24 +231,23 @@ def _(bias_pts, freq_pts, np):
             continue
         tried_subsets.add(subset_)
 
-        result = least_squares(
-            residuals,
-            p0,
-            method="lm", # lm is a fast option
-            args=(
+        try:
+            popt_log, _ = curve_fit(
+                f01_model_logparams,
                 bias_pts[subset],
                 freq_ghz[subset],
-            ),
-        )
-
-        if not result.success:
+                p0=p0,
+                method="lm",  # lm is a fast option
+            )
+        except RuntimeError:
+            # failed to converge on this subset
             continue
 
         popt = np.array([
-            np.exp(result.x[0]),
-            np.exp(result.x[1]),
-            np.exp(result.x[2]),
-            result.x[3],
+            np.exp(popt_log[0]),
+            np.exp(popt_log[1]),
+            np.exp(popt_log[2]),
+            popt_log[3],
         ])
 
         residuals_all = np.abs(freq_ghz - f01_model(bias_pts, *popt))
@@ -276,9 +267,7 @@ def _(bias_pts, freq_pts, np):
 
 
 @app.cell
-def _(best_inliers, best_params, bias_pts, f01_model, freq_ghz):
-    from scipy.optimize import curve_fit
-
+def _(best_inliers, best_params, bias_pts, curve_fit, f01_model, freq_ghz):
     # Finally optimize by doing a least-squares fit to the best set of inliers
     final_params, _ = curve_fit(
         f01_model,
@@ -342,11 +331,11 @@ def _(
     signal,
 ):
     plt.pcolormesh(freq, bias, signal, cmap="viridis")
-    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='lime', marker='.', s=60, zorder=10, label='Detected peaks')
-    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='white', marker='.', s=60, zorder=10, label='RANSAC inliers')
+    plt.scatter(freq_pts[~best_inliers], bias_pts[~best_inliers], color='lime', marker='.', s=60, zorder=10, label='Outliers')
+    plt.scatter(freq_pts[best_inliers], bias_pts[best_inliers], color='white', marker='.', s=60, zorder=10, label='Inliers')
     bias_plot_vals = np.linspace(bias.min(), bias.max(), num=500)
     freq_plot_vals = f01_model(bias_plot_vals, *final_params) * 1e9
-    plt.plot(freq_plot_vals, bias_plot_vals, color='black', label='Fit')
+    plt.plot(freq_plot_vals, bias_plot_vals, color='white', label='Fit')
 
     if best_point_bias is not None:
         plt.scatter( best_point_freq, best_point_bias, color='red', marker='.', s=60, zorder=15, label="Best point")
