@@ -179,8 +179,6 @@ def _(mo):
 
 @app.cell
 def _(bias_pts, curve_fit, freq_pts, np):
-    # from scipy.optimize import curve_fit
-
     INLIER_THRESHOLD = 0.5e6  # approximate width of a peak in the qubit spectroscopy in Hz
 
     def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
