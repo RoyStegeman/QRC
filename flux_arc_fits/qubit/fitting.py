@@ -38,7 +38,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_3.npz")
+    data = np.load(current_dir / "qubit_data_0.npz")
     return (data,)
 
 
@@ -79,15 +79,6 @@ def _(mo):
 
 @app.cell
 def _(np, signal):
-    # The frequency dependence of the resonator is flux-dependent, but the frequency
-    # dependence of the elements that affect the background signal (cable response,
-    # amplifiers) do not depend on flux. Therefore subtracting the mean across a frequency
-    # bin is a good way to estimate the non-resonator contribution to the background.
-    #
-    # NOTE: this works on the assumption that the resonator peak does not affect the median
-    # col_median = np.median(signal, axis=0, keepdims=True)
-    # col_diff = signal - col_median
-
     # Subtract also the row median, to remove the background contribution we see as the
     # gradient centred on the peak of the flux-arc.
     #
