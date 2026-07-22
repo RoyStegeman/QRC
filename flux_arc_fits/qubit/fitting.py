@@ -38,7 +38,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_0.npz")
+    data = np.load(current_dir / "qubit_data_3.npz")
     return (data,)
 
 
@@ -56,6 +56,7 @@ def _(data, np):
 
     signal = np.full((len(bias), len(freq)), np.nan)
     signal[bias_idx, freq_idx] = signal_data
+
     return bias, freq, freq_data, signal
 
 
@@ -78,28 +79,28 @@ def _(mo):
 
 
 @app.cell
-def _(np, signal):
-    # Subtract also the row median, to remove the background contribution we see as the
-    # gradient centred on the peak of the flux-arc.
-    #
-    # NOTE: this is probably a consequence of reading the resonator at the flux bias point,
-    # so can be avoided by moving the readout frequency to follow the resonator flux-arc
-    row_median = np.median(signal, axis=1, keepdims=True)
-    double_diff = signal - row_median
+def _():
+    # # Subtract also the row median, to remove the background contribution we see as the
+    # # gradient centred on the peak of the flux-arc.
+    # #
+    # # NOTE: this is probably a consequence of reading the resonator at the flux bias point,
+    # # so can be avoided by moving the readout frequency to follow the resonator flux-arc
+    # row_median = np.median(signal, axis=1, keepdims=True)
+    # double_diff = signal - row_median
 
-    # Determine if the remaining feature is a peak or a dip
-    sign = 1 if np.abs(double_diff.max()) > np.abs(double_diff.min()) else -1
-    filtered_signal = sign * double_diff
-    return (filtered_signal,)
+    # # Determine if the remaining feature is a peak or a dip
+    # sign = 1 if np.abs(double_diff.max()) > np.abs(double_diff.min()) else -1
+    # filtered_signal = sign * double_diff
+    return
 
 
 @app.cell
-def _(bias, filtered_signal, freq, plt):
-    plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    plt.xlabel("Frequency [Hz]")
-    plt.ylabel("Bias [a.u.]")
-    plt.colorbar(label="Signal [a.u.]")
-    plt.show()
+def _():
+    # plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
+    # plt.xlabel("Frequency [Hz]")
+    # plt.ylabel("Bias [a.u.]")
+    # plt.colorbar(label="Signal [a.u.]")
+    # plt.show()
     return
 
 
@@ -112,18 +113,19 @@ def _(mo):
 
 
 @app.cell
-def _(bias, filtered_signal, freq, np):
+def _(bias, freq, np, signal):
     from scipy.ndimage import gaussian_filter1d
     from scipy.signal import find_peaks
     from scipy.special import erfinv
 
     bias_pts, freq_pts = [], []
-    for index_filtered_signal, row in enumerate(filtered_signal):
+    for bias_val, signal_val in zip(bias, signal):
+
         # The Gaussian filter not only reduces noise in the background far away from the
         # arc, but also reduces noise within the arc, which may result in peaks being
         # detected correctly that otherwise would have been missed (see e.g
         # qubit_data_3.npz).
-        smoothed_row = gaussian_filter1d(row, sigma=2)
+        smoothed_row = gaussian_filter1d(signal_val, sigma=2)
         # The standard deviation is computed from the median absolute deviation instead of
         # the standard deviation itself to avoid the peaks in the arc from affecting the
         # estimate of the background noise. While this prominence threshold is somewhat
@@ -132,14 +134,21 @@ def _(bias, filtered_signal, freq, np):
         row_mad = np.median(np.abs(smoothed_row - np.median(smoothed_row)))
         row_std = 1.0 / (np.sqrt(2) * erfinv(0.5)) * row_mad
         # Use find_peaks instead of argmax because there may be nothing in a row
-        peaks, props = find_peaks(smoothed_row, prominence=row_std)
+        peaks, peak_props = find_peaks(smoothed_row, prominence=row_std)
+        dips, dip_props = find_peaks(-smoothed_row, prominence=row_std)
 
-        if len(peaks) == 0:
+        if len(peaks) == 0 and len(dips) == 0:
             continue
 
-        # Keep only the peak with the largest prominence per bias
-        best = peaks[np.argmax(props["prominences"])]
-        bias_pts.append(bias[index_filtered_signal])
+        # Keep only the feature with the largest prominence per bias.
+        if len(dips) == 0 or (
+            len(peaks) > 0
+            and peak_props["prominences"].max() >= dip_props["prominences"].max()
+        ):
+            best = peaks[np.argmax(peak_props["prominences"])]
+        else:
+            best = dips[np.argmax(dip_props["prominences"])]
+        bias_pts.append(bias_val)
         freq_pts.append(freq[best])
 
     bias_pts = np.asarray(bias_pts)
@@ -148,8 +157,8 @@ def _(bias, filtered_signal, freq, np):
 
 
 @app.cell
-def _(bias, bias_pts, filtered_signal, freq, freq_pts, plt):
-    plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
+def _(bias, bias_pts, freq, freq_pts, plt, signal):
+    plt.pcolormesh(freq, bias, signal, cmap="viridis")
     plt.scatter(freq_pts, bias_pts, color='white', marker='.', s=60, zorder=10, label='Detected peaks')
 
     plt.xlabel("Frequency [Hz]")
