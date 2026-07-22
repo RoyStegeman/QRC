@@ -38,7 +38,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_3.npz")
+    data = np.load(current_dir / "qubit_data_10.npz")
     return (data,)
 
 
@@ -67,40 +67,6 @@ def _(bias, freq, plt, signal):
     plt.ylabel("Bias [a.u.]")
     plt.colorbar(label="Signal [a.u.]")
     plt.show()
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Remove background (along column is just for the resonator)
-    """)
-    return
-
-
-@app.cell
-def _():
-    # # Subtract also the row median, to remove the background contribution we see as the
-    # # gradient centred on the peak of the flux-arc.
-    # #
-    # # NOTE: this is probably a consequence of reading the resonator at the flux bias point,
-    # # so can be avoided by moving the readout frequency to follow the resonator flux-arc
-    # row_median = np.median(signal, axis=1, keepdims=True)
-    # double_diff = signal - row_median
-
-    # # Determine if the remaining feature is a peak or a dip
-    # sign = 1 if np.abs(double_diff.max()) > np.abs(double_diff.min()) else -1
-    # filtered_signal = sign * double_diff
-    return
-
-
-@app.cell
-def _():
-    # plt.pcolormesh(freq, bias, filtered_signal, cmap="viridis")
-    # plt.xlabel("Frequency [Hz]")
-    # plt.ylabel("Bias [a.u.]")
-    # plt.colorbar(label="Signal [a.u.]")
-    # plt.show()
     return
 
 
@@ -179,7 +145,7 @@ def _(mo):
 
 @app.cell
 def _(bias_pts, curve_fit, freq_pts, np):
-    INLIER_THRESHOLD = 0.5e6  # approximate width of a peak in the qubit spectroscopy in Hz
+    INLIER_THRESHOLD = 0.6e6  # approximate width of a peak in the qubit spectroscopy in Hz
 
     def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
         """Eq. 14.38 from Manenti & Motta"""
