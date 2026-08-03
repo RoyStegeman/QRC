@@ -1,0 +1,14 @@
+{
+    "\"readout_frequency\"": {
+        "2": 7494242386.568713
+    },
+    "\"bare_frequency\"": {
+        "2": 7493782386.568713
+    },
+    "\"readout_amplitude\"": {
+        "2": 0.26
+    },
+    "\"successful_fit\"": {
+        "2": true
+    }
+}

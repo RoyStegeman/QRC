@@ -1,0 +1,40 @@
+{
+    "backend": "qibolab",
+    "platform": "qw5q_platinum",
+    "start_time": "2026-03-30 13:50:39.147139+00:00",
+    "end_time": "2026-03-30 13:51:45.529301+00:00",
+    "stats": {
+        "resonator_punchout-0": {
+            "acquisition": 12.223789924988523,
+            "fit": 0.010468084015883505
+        },
+        "resonator_punchout-1": {
+            "acquisition": 12.227684546000091,
+            "fit": 0.003219616977730766
+        },
+        "resonator_punchout-2": {
+            "acquisition": 12.240641023003263,
+            "fit": 0.010779520001960918
+        },
+        "resonator_punchout-3": {
+            "acquisition": 12.26271335099591,
+            "fit": 0.0035980360116809607
+        },
+        "resonator_punchout-4": {
+            "acquisition": 12.239845192991197,
+            "fit": 0.003277290001278743
+        }
+    },
+    "author": null,
+    "tag": null,
+    "targets": null,
+    "versions": {
+        "qibo": "0.3.1",
+        "numpy": "2.2.6",
+        "qibolab": "0.2.13",
+        "qibocal": "0.2.5"
+    },
+    "date": "2026-03-30",
+    "start-time": "13:50:39",
+    "end-time": "13:51:45"
+}
