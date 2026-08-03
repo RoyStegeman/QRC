@@ -13,7 +13,7 @@ def _():
     from pathlib import Path
     from scipy.optimize import curve_fit
 
-    INLIER_THRESHOLD = 0.0002*1e9  # approximate width of a peak in the qubit spectroscopy in Hz
+    INLIER_THRESHOLD = 0.2*6  # approximate width of a peak in the qubit spectroscopy in Hz
     return INLIER_THRESHOLD, Path, curve_fit, mo, np, plt
 
 
@@ -28,7 +28,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "resonator_data_0.npz")
+    data = np.load(current_dir / "resonator_data_13.npz")
     return (data,)
 
 
@@ -46,7 +46,6 @@ def _(data, np):
 
     signal = np.full((len(bias), len(freq)), np.nan)
     signal[bias_idx, freq_idx] = signal_data
-
     return bias, freq, freq_data, signal
 
 
@@ -74,10 +73,23 @@ def _(INLIER_THRESHOLD, bias, freq, np, signal):
     from scipy.ndimage import median_filter, gaussian_filter1d
     from scipy.special import erfinv
 
+
+
+    # median_per_flux = np.median(signal, axis=1, keepdims=True)
+    # median_per_frequency = np.median(signal, axis=0, keepdims=True)
+    # global_median = np.median(signal)
+
+    # centered_signal = (
+    #     signal
+    #     - median_per_flux
+    #     - median_per_frequency
+    #     + global_median
+    # )
+
     bias_pts, freq_pts = [], []
     signal_residuals = []
     is_peak = []
-    for bias_val, row in zip(bias,signal):
+    for bias_val, row in zip(bias,signal-np.median(signal, axis=1, keepdims=True)):
 
         # There may be fluctuations along the frequency axis caused by elements such cables
         # or amplifiers. In principle this is flux independent and therefore ideal to remove
@@ -85,16 +97,19 @@ def _(INLIER_THRESHOLD, bias, freq, np, signal):
         # which case we end up subtracting the arc rather than background. To avoid this, we
         # use median_filter.
         samples_per_peak = np.ceil(INLIER_THRESHOLD/np.diff(freq)[0])
-        baseline = median_filter(row, size=int(20*samples_per_peak), mode='nearest')
-        residual = row - baseline
+        baseline = median_filter(row, size=int(samples_per_peak), mode='mirror')
+        residual = baseline - np.median(baseline)
+
 
         # Estimate the std from median absolute deviation because a naive std is inflated by
         # the arc we're trying to detect.
-        row_mad = np.median(np.abs(residual - np.median(residual)))
-        row_std = 1.0 / (np.sqrt(2) * erfinv(0.5))* row_mad
+        # row_mad = np.median(np.abs(residual - np.median(residual)))
+        # row_std = 1.0 / (np.sqrt(2) * erfinv(0.5))* row_mad
+
+        # residual  = row
 
         # Detect both peaks and dips by finding prominent extrema in the absolute residual.
-        peaks, props = find_peaks(np.abs(residual), prominence=row_std)
+        peaks, props = find_peaks(np.abs(residual), prominence=0)
         if len(peaks) == 0:
             continue
 
@@ -111,13 +126,12 @@ def _(INLIER_THRESHOLD, bias, freq, np, signal):
 
     bias_pts = np.asarray(bias_pts)[mask]
     freq_pts = np.asarray(freq_pts)[mask]
-
-    return bias_pts, freq_pts, signal_residuals
+    return bias_pts, freq_pts
 
 
 @app.cell
-def _(bias, bias_pts, freq, freq_pts, np, plt, signal_residuals):
-    plt.pcolormesh(freq, bias, np.stack(signal_residuals), cmap="viridis")
+def _(bias, bias_pts, freq, freq_pts, np, plt, signal):
+    plt.pcolormesh(freq, bias, signal-np.median(signal, axis=1, keepdims=True), cmap="viridis")
     plt.scatter(freq_pts, bias_pts, color='white', marker='.', s=60, zorder=10, label='Detected peaks')
 
     plt.xlabel("Frequency [Hz]")
@@ -330,7 +344,7 @@ def _(
     freq_plot_vals = fit_function(bias_plot_vals, *final_params) * 1e9
     plt.plot(freq_plot_vals, bias_plot_vals, color='white', label='Fit')
     freq_plot_vals_best_params = fit_function(bias_plot_vals, *best_params) * 1e9
-    plt.plot(freq_plot_vals_best_params, bias_plot_vals, color='red', label='prior')
+    plt.plot(freq_plot_vals_best_params, bias_plot_vals, color='red', ls='--', label='prior')
 
     plt.xlim(freq_data.min(), freq_data.max())
     plt.xlabel("Frequency [Hz]")

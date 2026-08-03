@@ -38,7 +38,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_10.npz")
+    data = np.load(current_dir / "qubit_data_0.npz")
     return (data,)
 
 
@@ -56,7 +56,6 @@ def _(data, np):
 
     signal = np.full((len(bias), len(freq)), np.nan)
     signal[bias_idx, freq_idx] = signal_data
-
     return bias, freq, freq_data, signal
 
 
@@ -84,24 +83,29 @@ def _(bias, freq, np, signal):
     from scipy.signal import find_peaks
     from scipy.special import erfinv
 
+
     bias_pts, freq_pts = [], []
-    for bias_val, signal_val in zip(bias, signal):
+    for bias_val, signal_val in zip(bias, signal - np.median(signal,axis=1,keepdims=True)):
 
         # The Gaussian filter not only reduces noise in the background far away from the
         # arc, but also reduces noise within the arc, which may result in peaks being
         # detected correctly that otherwise would have been missed (see e.g
         # qubit_data_3.npz).
+        background = gaussian_filter1d(signal_val, sigma=20)
         smoothed_row = gaussian_filter1d(signal_val, sigma=2)
+        # smoothed_row = signal_val
         # The standard deviation is computed from the median absolute deviation instead of
         # the standard deviation itself to avoid the peaks in the arc from affecting the
         # estimate of the background noise. While this prominence threshold is somewhat
         # motivated, it is still a choice and it has been observed that the result is not
         # very sensitive to it and probably it is even fine to set the threshold to 0.
-        row_mad = np.median(np.abs(smoothed_row - np.median(smoothed_row)))
+        residual = smoothed_row - background
+        row_mad = np.median(np.abs(residual - np.median(residual)))
         row_std = 1.0 / (np.sqrt(2) * erfinv(0.5)) * row_mad
         # Use find_peaks instead of argmax because there may be nothing in a row
-        peaks, peak_props = find_peaks(smoothed_row, prominence=row_std)
-        dips, dip_props = find_peaks(-smoothed_row, prominence=row_std)
+        peaks, peak_props = find_peaks(residual, prominence=1*row_std)
+        dips, dip_props = find_peaks(-residual, prominence=1*row_std)
+
 
         if len(peaks) == 0 and len(dips) == 0:
             continue
@@ -145,7 +149,7 @@ def _(mo):
 
 @app.cell
 def _(bias_pts, curve_fit, freq_pts, np):
-    INLIER_THRESHOLD = 0.6e6  # approximate width of a peak in the qubit spectroscopy in Hz
+    INLIER_THRESHOLD = 0.2e6  # approximate width of a peak in the qubit spectroscopy in Hz
 
     def f01_model(bias, EJ1, EJ2, EC, bias_flux_ratio):
         """Eq. 14.38 from Manenti & Motta"""
