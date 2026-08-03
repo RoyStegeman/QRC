@@ -1,0 +1,12 @@
+id: resonator_flux
+operation: resonator_flux
+parameters:
+  bias_step: 0.02
+  bias_width: 0.8
+  freq_step: 100000.0
+  freq_width: 8000000.0
+  nshots: 500
+  relaxation_time: 100
+targets:
+- 4
+update: true

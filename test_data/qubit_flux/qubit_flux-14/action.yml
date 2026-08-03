@@ -1,0 +1,14 @@
+id: qubit_flux
+operation: qubit_flux
+parameters:
+  bias_step: 0.002
+  bias_width: 0.15
+  drive_amplitude: 0.005
+  drive_duration: 4000
+  freq_step: 400000.0
+  freq_width: 70000000.0
+  nshots: 500
+  relaxation_time: 100
+targets:
+- 1
+update: true

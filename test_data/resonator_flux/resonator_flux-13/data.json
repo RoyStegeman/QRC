@@ -1,0 +1,12 @@
+{
+    "\"resonator_type\"": "2D",
+    "\"qubit_frequency\"": {
+        "1": 4815846770.297001
+    },
+    "\"bare_resonator_frequency\"": {
+        "1": 7340000000.0
+    },
+    "\"charging_energy\"": {
+        "1": 0
+    }
+}
