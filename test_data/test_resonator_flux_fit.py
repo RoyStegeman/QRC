@@ -90,12 +90,12 @@ if __name__ == "__main__":
             fitted_params = _filtered(fitted.fitted_parameters[qubit])
             expected_params = _filtered(expected.fitted_parameters[qubit])
 
-            fitted_frequencies = fit_function(bias, **fitted_params) * GHZ_TO_HZ
-            expected_frequencies = fit_function(bias, **expected_params) * GHZ_TO_HZ
+            fitted_frequencies = fit_function(bias, **fitted_params)
+            expected_frequencies = fit_function(bias, **expected_params)
 
             plt.figure(figsize=(10, 6))
             plt.pcolormesh(freq, bias, signal, cmap="viridis")
-            plt.xlabel("Frequency [GHz]")
+            plt.xlabel("Frequency [Hz]")
             plt.ylabel("Bias [a.u.]")
             plt.colorbar(label="Signal [a.u.]")
             plt.plot(
@@ -129,6 +129,25 @@ if __name__ == "__main__":
                 s=60,
                 zorder=15,
                 label="Old sweetspot",
+            )
+            inliers = np.array(fitted.inliers[qubit])
+            peak_frequencies = np.array(fitted.peak_frequencies[qubit])
+            peak_biases = np.array(fitted.peak_biases[qubit])
+            plt.scatter(
+                peak_frequencies[inliers],
+                peak_biases[inliers],
+                color="black",
+                s=40,
+                zorder=15,
+                label="Inliers",
+            )
+            plt.scatter(
+                peak_frequencies[~inliers],
+                peak_biases[~inliers],
+                color="purple",
+                s=20,
+                zorder=15,
+                label="Outliers",
             )
             plt.xlim(freq.min(), freq.max())
             plt.legend()

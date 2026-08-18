@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.14"
+__generated_with = "0.23.16"
 app = marimo.App(width="medium")
 
 
@@ -28,7 +28,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "resonator_data_13.npz")
+    data = np.load(current_dir / "resonator_data_10.npz")
     return (data,)
 
 
@@ -41,11 +41,10 @@ def _(data, np):
     bias_data = data_arr["bias"]
     signal_data = data_arr["signal"]
 
-    freq, freq_idx = np.unique(freq_data, return_inverse=True)
-    bias, bias_idx = np.unique(bias_data, return_inverse=True)
+    freq = np.unique(freq_data)
+    bias = np.unique(bias_data)
 
-    signal = np.full((len(bias), len(freq)), np.nan)
-    signal[bias_idx, freq_idx] = signal_data
+    signal = signal_data.reshape(len(bias), len(freq))
     return bias, freq, freq_data, signal
 
 
@@ -68,57 +67,51 @@ def _(mo):
 
 
 @app.cell
-def _(INLIER_THRESHOLD, bias, freq, np, signal):
+def _(bias, freq, np, signal):
     from scipy.signal import find_peaks
     from scipy.ndimage import median_filter, gaussian_filter1d
     from scipy.special import erfinv
+    from qibocal.protocols.flux_dependence import utils
 
 
+    median_per_flux = np.median(signal, axis=1, keepdims=True)
+    median_per_frequency = np.median(signal, axis=0, keepdims=True)
+    global_median = np.median(signal)
 
-    # median_per_flux = np.median(signal, axis=1, keepdims=True)
-    # median_per_frequency = np.median(signal, axis=0, keepdims=True)
-    # global_median = np.median(signal)
+    # Match the flux feature extraction preprocessing to reduce background
+    # gradients and normalize each bias row before peak picking.
+    filtered_signal = utils.filter_data(signal)
+    scaled_signal = utils.minmax_scaling(filtered_signal, axis=1)
 
-    # centered_signal = (
-    #     signal
-    #     - median_per_flux
-    #     - median_per_frequency
-    #     + global_median
-    # )
+    # Sometimes there are bright spots for a given bias. Not sure what causes them,
+    # but this should get rid of them.
+    median_per_bias = np.median(scaled_signal, axis=1, keepdims=True)
+    centered_signal = scaled_signal - median_per_bias
 
     bias_pts, freq_pts = [], []
-    signal_residuals = []
     is_peak = []
-    for bias_val, row in zip(bias,signal-np.median(signal, axis=1, keepdims=True)):
-
-        # There may be fluctuations along the frequency axis caused by elements such cables
-        # or amplifiers. In principle this is flux independent and therefore ideal to remove
-        # by subtracting the median per frequency bin. However, the arc may be very flat, in
-        # which case we end up subtracting the arc rather than background. To avoid this, we
-        # use median_filter.
-        samples_per_peak = np.ceil(INLIER_THRESHOLD/np.diff(freq)[0])
-        baseline = median_filter(row, size=int(samples_per_peak), mode='mirror')
-        residual = baseline - np.median(baseline)
-
-
-        # Estimate the std from median absolute deviation because a naive std is inflated by
-        # the arc we're trying to detect.
-        # row_mad = np.median(np.abs(residual - np.median(residual)))
-        # row_std = 1.0 / (np.sqrt(2) * erfinv(0.5))* row_mad
-
-        # residual  = row
-
-        # Detect both peaks and dips by finding prominent extrema in the absolute residual.
-        peaks, props = find_peaks(np.abs(residual), prominence=0)
-        if len(peaks) == 0:
+    for bias_val, row in zip(bias, centered_signal):
+        # Detect both peaks and dips explicitly and keep the most prominent
+        # feature per bias row.
+        peaks, peak_props = find_peaks(row, prominence=0.2)
+        dips, dip_props = find_peaks(-row, prominence=0.2)
+        if len(peaks) == 0 and len(dips) == 0:
             continue
 
-        # Keep the most prominent extremum and record whether it is a peak or a dip.
-        best = peaks[np.argmax(props['prominences'])]
+        if len(dips) == 0 or (
+            len(peaks) > 0
+            and peak_props["prominences"].max() >= dip_props["prominences"].max()
+        ):
+            best = peaks[np.argmax(peak_props["prominences"])]
+            best_is_peak = True
+        else:
+            best = dips[np.argmax(dip_props["prominences"])]
+            best_is_peak = False
+
         bias_pts.append(bias_val)
         freq_pts.append(freq[best])
-        signal_residuals.append(residual)
-        is_peak.append(residual[best] > 0)
+        is_peak.append(best_is_peak)
+
 
     # Keep only the dominant extremum type to reject rows detecting the opposite feature.
     select_peaks = sum(is_peak) >= (len(is_peak) / 2)
@@ -130,8 +123,8 @@ def _(INLIER_THRESHOLD, bias, freq, np, signal):
 
 
 @app.cell
-def _(bias, bias_pts, freq, freq_pts, np, plt, signal):
-    plt.pcolormesh(freq, bias, signal-np.median(signal, axis=1, keepdims=True), cmap="viridis")
+def _(bias, bias_pts, freq, freq_pts, plt, signal_residuals):
+    plt.pcolormesh(freq, bias, signal_residuals, cmap="viridis")
     plt.scatter(freq_pts, bias_pts, color='white', marker='.', s=60, zorder=10, label='Detected peaks')
 
     plt.xlabel("Frequency [Hz]")

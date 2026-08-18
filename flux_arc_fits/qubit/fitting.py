@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.14"
+__generated_with = "0.23.16"
 app = marimo.App(width="medium")
 
 
@@ -12,9 +12,10 @@ def _():
     import matplotlib.pyplot as plt
     from pathlib import Path
     from scipy.optimize import curve_fit
+    import numpy.typing as npt
 
 
-    return Path, curve_fit, mo, np, plt
+    return Path, curve_fit, mo, np, npt, plt
 
 
 @app.cell(hide_code=True)
@@ -38,7 +39,7 @@ def _(mo):
 @app.cell
 def _(Path, np):
     current_dir = Path(__file__).resolve().parent
-    data = np.load(current_dir / "qubit_data_0.npz")
+    data = np.load(current_dir / "qubit_data_18.npz")
     return (data,)
 
 
@@ -78,51 +79,183 @@ def _(mo):
 
 
 @app.cell
-def _(bias, freq, np, signal):
-    from scipy.ndimage import gaussian_filter1d
-    from scipy.signal import find_peaks
-    from scipy.special import erfinv
+def _():
+    # from scipy.ndimage import gaussian_filter1d
+    # from scipy.signal import find_peaks
+    # from scipy.special import erfinv
 
 
-    bias_pts, freq_pts = [], []
-    for bias_val, signal_val in zip(bias, signal - np.median(signal,axis=1,keepdims=True)):
+    # bias_pts, freq_pts = [], []
+    # for bias_val, signal_val in zip(bias, signal - np.median(signal,axis=1,keepdims=True)):
 
-        # The Gaussian filter not only reduces noise in the background far away from the
-        # arc, but also reduces noise within the arc, which may result in peaks being
-        # detected correctly that otherwise would have been missed (see e.g
-        # qubit_data_3.npz).
-        background = gaussian_filter1d(signal_val, sigma=20)
-        smoothed_row = gaussian_filter1d(signal_val, sigma=2)
-        # smoothed_row = signal_val
-        # The standard deviation is computed from the median absolute deviation instead of
-        # the standard deviation itself to avoid the peaks in the arc from affecting the
-        # estimate of the background noise. While this prominence threshold is somewhat
-        # motivated, it is still a choice and it has been observed that the result is not
-        # very sensitive to it and probably it is even fine to set the threshold to 0.
-        residual = smoothed_row - background
-        row_mad = np.median(np.abs(residual - np.median(residual)))
-        row_std = 1.0 / (np.sqrt(2) * erfinv(0.5)) * row_mad
-        # Use find_peaks instead of argmax because there may be nothing in a row
-        peaks, peak_props = find_peaks(residual, prominence=1*row_std)
-        dips, dip_props = find_peaks(-residual, prominence=1*row_std)
+    #     # The Gaussian filter not only reduces noise in the background far away from the
+    #     # arc, but also reduces noise within the arc, which may result in peaks being
+    #     # detected correctly that otherwise would have been missed (see e.g
+    #     # qubit_data_3.npz).
+    #     background = gaussian_filter1d(signal_val, sigma=20)
+    #     smoothed_row = gaussian_filter1d(signal_val, sigma=2)
+    #     # smoothed_row = signal_val
+    #     # The standard deviation is computed from the median absolute deviation instead of
+    #     # the standard deviation itself to avoid the peaks in the arc from affecting the
+    #     # estimate of the background noise. While this prominence threshold is somewhat
+    #     # motivated, it is still a choice and it has been observed that the result is not
+    #     # very sensitive to it and probably it is even fine to set the threshold to 0.
+    #     residual = smoothed_row - background
+    #     row_mad = np.median(np.abs(residual - np.median(residual)))
+    #     row_std = 1.0 / (np.sqrt(2) * erfinv(0.5)) * row_mad
+    #     # Use find_peaks instead of argmax because there may be nothing in a row
+    #     peaks, peak_props = find_peaks(residual, prominence=1*row_std)
+    #     dips, dip_props = find_peaks(-residual, prominence=1*row_std)
 
 
-        if len(peaks) == 0 and len(dips) == 0:
-            continue
+    #     if len(peaks) == 0 and len(dips) == 0:
+    #         continue
 
-        # Keep only the feature with the largest prominence per bias.
-        if len(dips) == 0 or (
-            len(peaks) > 0
-            and peak_props["prominences"].max() >= dip_props["prominences"].max()
-        ):
-            best = peaks[np.argmax(peak_props["prominences"])]
-        else:
-            best = dips[np.argmax(dip_props["prominences"])]
-        bias_pts.append(bias_val)
-        freq_pts.append(freq[best])
+    #     # Keep only the feature with the largest prominence per bias.
+    #     if len(dips) == 0 or (
+    #         len(peaks) > 0
+    #         and peak_props["prominences"].max() >= dip_props["prominences"].max()
+    #     ):
+    #         best = peaks[np.argmax(peak_props["prominences"])]
+    #     else:
+    #         best = dips[np.argmax(dip_props["prominences"])]
+    #     bias_pts.append(bias_val)
+    #     freq_pts.append(freq[best])
 
-    bias_pts = np.asarray(bias_pts)
-    freq_pts = np.asarray(freq_pts)
+    # bias_pts = np.asarray(bias_pts)
+    # freq_pts = np.asarray(freq_pts)
+    return
+
+
+@app.cell
+def _(bias, find_peaks, freq, gaussian_filter, median_filter, np, npt, signal):
+
+
+    _MAD_TO_STD = 1.4826
+    _PEAK_WIDTH_HZ = 0.6e6
+    _MIN_PEAK_POINTS = 8
+
+
+    def _peak_candidates(
+        frequencies: npt.NDArray[np.floating],
+        biases: npt.NDArray[np.floating],
+        signal: npt.NDArray[np.floating],
+        *,
+        sensitive: bool,
+    ) -> npt.NDArray[np.floating]:
+        """Return at most one peak or dip per bias row.
+
+        The regular pass rejects low-SNR rows. The sensitive pass adds smoothing along the
+        bias axis and lowers the SNR gate, so a faint continuous line survives.
+        """
+        n_freq = len(frequencies)
+        background_size = max(21, n_freq // 2)
+        background_size += background_size % 2 == 0
+        if background_size >= n_freq:
+            background_size = n_freq - 1 if (n_freq - 1) % 2 else n_freq - 2
+        background_size = max(3, background_size)
+
+        background = median_filter(
+            signal, size=(1, background_size), mode="nearest"
+        )
+        sigma = (1.5, 1.7) if sensitive else (0, 2)
+        residual = gaussian_filter(signal - background, sigma=sigma, mode="nearest")
+        min_snr = 1 if sensitive else 3
+
+        points: list[tuple[float, float, bool, float]] = []
+        for bias, row in zip(biases, residual):
+            row_mad = np.median(np.abs(row - np.median(row)))
+            row_std = _MAD_TO_STD * row_mad if row_mad else float(np.std(row))
+            if not np.isfinite(row_std) or row_std <= 0:
+                continue
+
+            peaks, peak_props = find_peaks(row, prominence=row_std)
+            dips, dip_props = find_peaks(-row, prominence=row_std)
+
+            candidates: list[tuple[float, int, bool]] = []
+            for indices, props, is_peak in (
+                (peaks, peak_props, True),
+                (dips, dip_props, False),
+            ):
+                if len(indices):
+                    i = int(np.argmax(props["prominences"]))
+                    j = int(indices[i])
+                    prominence = float(props["prominences"][i])
+                    if abs(float(row[j])) >= min_snr * row_std:
+                        candidates.append((prominence, j, is_peak))
+
+            if candidates:
+                prominence, j, is_peak = max(candidates, key=lambda item: item[0])
+                points.append(
+                    (float(bias), float(frequencies[j]), is_peak, prominence)
+                )
+
+        return np.asarray(points, dtype=float).reshape(-1, 4)
+
+
+    def _filter_strict_candidates(
+        points: npt.NDArray[np.floating],
+        biases: npt.NDArray[np.floating],
+    ) -> npt.NDArray[np.floating]:
+        """Remove only isolated points and a clearly subdominant polarity."""
+        if len(points) >= _MIN_PEAK_POINTS:
+            bias_steps = np.diff(np.unique(biases))
+            if len(bias_steps):
+                bias_window = 6 * float(np.median(bias_steps))
+                keep = []
+                for bias, frequency, *_ in points:
+                    neighbors = (
+                        (np.abs(points[:, 0] - bias) < bias_window)
+                        & (
+                            np.abs(points[:, 1] - frequency)
+                            < 2.5 * _PEAK_WIDTH_HZ
+                        )
+                    )
+                    # The point itself is included, so this requires two neighbors.
+                    keep.append(np.count_nonzero(neighbors) >= 3)
+                keep = np.asarray(keep)
+                # Do not trust this filter if it cannot find a plausible line fragment.
+                if keep.sum() >= _MIN_PEAK_POINTS:
+                    points = points[keep]
+
+        if len(points):
+            is_peak = points[:, 2].astype(bool)
+            peak_weight = points[is_peak, 3].sum()
+            dip_weight = points[~is_peak, 3].sum()
+            if peak_weight > 2 * dip_weight:
+                points = points[is_peak]
+            elif dip_weight > 2 * peak_weight:
+                points = points[~is_peak]
+
+        return points
+
+
+    def _extract_peak_coordinates(
+        frequencies: npt.NDArray[np.floating],
+        biases: npt.NDArray[np.floating],
+        signal: npt.NDArray[np.floating],
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+        """Extract at most one qubit-spectroscopy feature per bias row.
+
+        A high-SNR pass handles normal data and removes obvious isolated outliers. If too
+        few points survive for RANSAC, a lightly bias-smoothed pass keeps faint features and
+        deliberately leaves outlier rejection to RANSAC.
+        """
+        frequencies = np.asarray(frequencies)
+        biases = np.asarray(biases)
+        signal = np.asarray(signal).reshape(len(biases), len(frequencies))
+
+        points = _filter_strict_candidates(
+            _peak_candidates(frequencies, biases, signal, sensitive=False), biases
+        )
+        if len(points) < _MIN_PEAK_POINTS:
+            points = _peak_candidates(frequencies, biases, signal, sensitive=True)
+
+        return points[:, 0], points[:, 1]
+
+
+    bias_pts, freq_pts = _extract_peak_coordinates(freq,bias,signal)
+
     return bias_pts, freq_pts
 
 
